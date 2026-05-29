@@ -72,6 +72,27 @@ button:hover { border-color: var(--accent); color: var(--accent); }
 
 .rates #status { color: var(--muted); font-size: 12px; }
 
+.diag {
+  margin: 10px 0 4px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 12px;
+}
+
+#pageStatus {
+  color: var(--muted);
+  margin-bottom: 6px;
+  word-break: break-word;
+}
+
+#pageStatus.ok { color: var(--accent); }
+#pageStatus.warn { color: #d97706; }
+#pageStatus.err { color: #dc2626; }
+
+.dbg { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; color: var(--muted); }
+.dbg input { margin: 0; }
+
 footer {
   margin-top: 10px;
   padding-top: 8px;

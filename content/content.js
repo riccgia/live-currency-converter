@@ -86,9 +86,13 @@ let state = {
   enabled: true,
   target: "EUR",
   showOriginal: true,
+  debug: false,
   rates: null,    // USD-based
   base: "USD",
+  lastError: null,
 };
+
+const log = (...args) => { if (state.debug) console.log("[lc-converter]", ...args); };
 
 function parseAmount(raw, currencyCode) {
   // Strip whitespace (regular, NBSP, narrow/thin no-break) and Swiss apostrophe.
@@ -429,18 +433,34 @@ function stopObserver() {
 }
 
 async function loadSettings() {
-  const sync = await chrome.storage.sync.get(["target", "enabled", "showOriginal"]);
+  const sync = await chrome.storage.sync.get(["target", "enabled", "showOriginal", "debug"]);
   state.target = sync.target ?? "EUR";
   state.enabled = sync.enabled ?? true;
   state.showOriginal = sync.showOriginal ?? true;
+  state.debug = !!sync.debug;
+  log("settings loaded", { target: state.target, enabled: state.enabled, debug: state.debug });
 }
 
 async function loadRates() {
-  const res = await chrome.runtime.sendMessage({ type: "GET_RATES" });
-  if (res?.ok) {
-    state.rates = res.rates;
-    state.base = res.base;
+  try {
+    const res = await chrome.runtime.sendMessage({ type: "GET_RATES" });
+    if (res?.ok) {
+      state.rates = res.rates;
+      state.base = res.base;
+      state.lastError = null;
+      log("rates loaded", { base: state.base, sample: { EUR: res.rates.EUR, GBP: res.rates.GBP, JPY: res.rates.JPY } });
+    } else {
+      state.lastError = res?.error || "rates fetch failed";
+      log("rates fetch failed", state.lastError);
+    }
+  } catch (e) {
+    state.lastError = String(e?.message || e);
+    log("rates fetch threw", state.lastError);
   }
+}
+
+function countConverted() {
+  return document.querySelectorAll("span.lc-price[data-lc-converted='1']").length;
 }
 
 async function init() {
@@ -457,10 +477,13 @@ async function init() {
   if (state.enabled && state.rates) {
     scan(document.body);
     startObserver();
+    log("initial scan done:", countConverted(), "prices converted; target =", state.target);
+  } else {
+    log("init skipped — enabled:", state.enabled, "rates:", !!state.rates, "lastError:", state.lastError);
   }
 }
 
-chrome.runtime.onMessage.addListener((msg) => {
+chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg?.type === "SETTINGS_CHANGED") {
     (async () => {
       revertAll();
@@ -472,7 +495,37 @@ chrome.runtime.onMessage.addListener((msg) => {
         startObserver();
       }
     })();
+    return false;
   }
+  if (msg?.type === "RESCAN") {
+    (async () => {
+      revertAll();
+      stopObserver();
+      await loadRates(); // pick up any newly fetched rates too
+      if (state.enabled && state.rates) {
+        scan(document.body);
+        startObserver();
+      }
+      log("manual rescan complete:", countConverted(), "prices converted");
+      sendResponse({ ok: true, converted: countConverted() });
+    })();
+    return true;
+  }
+  if (msg?.type === "GET_STATUS") {
+    sendResponse({
+      ok: true,
+      enabled: state.enabled,
+      target: state.target,
+      base: state.base,
+      ratesLoaded: !!state.rates,
+      convertedCount: countConverted(),
+      lastError: state.lastError,
+      pageLocale: document.documentElement.lang || navigator.language || null,
+      pageCommaDecimal: PAGE_COMMA_DECIMAL,
+    });
+    return false;
+  }
+  return false;
 });
 
 if (document.readyState === "loading") {
