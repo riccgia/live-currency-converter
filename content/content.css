@@ -1,0 +1,4 @@
+span.lc-price[data-lc-converted="1"] {
+  border-bottom: 1px dotted currentColor;
+  cursor: help;
+}

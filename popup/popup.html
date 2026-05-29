@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Live Currency Converter</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <header>
+      <h1>Currency Converter</h1>
+      <label class="switch" title="Enable on this site">
+        <input type="checkbox" id="enabled" />
+        <span class="slider"></span>
+      </label>
+    </header>
+
+    <section class="row">
+      <label for="target">Convert prices to</label>
+      <select id="target"></select>
+    </section>
+
+    <section class="row">
+      <label for="showOriginal">Show original on hover</label>
+      <input type="checkbox" id="showOriginal" checked />
+    </section>
+
+    <section class="row rates">
+      <span id="status">Loading rates…</span>
+      <button id="refresh" type="button">Refresh</button>
+    </section>
+
+    <footer>
+      <small>Rates by open.er-api.com</small>
+    </footer>
+
+    <script src="popup.js"></script>
+  </body>
+</html>
