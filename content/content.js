@@ -27,7 +27,8 @@ const SYMBOL_TO_CODE = {
   "zł": "PLN",
   "kr": "SEK", // ambiguous with NOK/DKK; default SEK
   "CHF": "CHF",
-  // "Fr" deliberately omitted — too many false positives ("From 100", "Fr 5pm").
+  "Fr.": "CHF",   // Swiss franc — require the period; bare "Fr" matches "From"/"Friday"
+  "SFr.": "CHF",  // older Swiss-franc notation
 };
 
 // Currencies whose conventional formatting uses comma as decimal separator.

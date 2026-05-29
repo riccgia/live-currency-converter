@@ -18,6 +18,10 @@ const html = `<!doctype html><html lang="en"><body>
   <div id="case-with-surround"><span>You pay <span>$</span><span>10.99</span> today</span></div>
   <div id="case-eu"><span>1.234,56&nbsp;€</span></div>
   <div id="case-jpy">¥1,000</div>
+  <div id="case-chf-iso">CHF 24.90</div>
+  <div id="case-chf-fr">Fr. 24.90</div>
+  <div id="case-chf-fr-nbsp">Fr.&nbsp;24.90</div>
+  <div id="case-fr-false-positive">From 100 friends online</div>
 </body></html>`;
 
 const dom = new JSDOM(html, { url: "https://example.com/" });
@@ -28,7 +32,7 @@ const { window } = dom;
 // (an EUR-source price with target=EUR would correctly be a no-op).
 const fakeStorageSync = { target: "GBP", enabled: true, showOriginal: true };
 const fakeStorageLocal = {
-  rates: { EUR: 0.9, USD: 1, JPY: 150, GBP: 0.8 },
+  rates: { EUR: 0.9, USD: 1, JPY: 150, GBP: 0.8, CHF: 0.88 },
   base: "USD",
 };
 
@@ -107,6 +111,26 @@ const api = m.exports;
       id: "case-jpy",
       label: "JPY `¥1,000`",
       expectConverted: true,
+    },
+    {
+      id: "case-chf-iso",
+      label: "Swiss `CHF 24.90`",
+      expectConverted: true,
+    },
+    {
+      id: "case-chf-fr",
+      label: "Swiss `Fr. 24.90`",
+      expectConverted: true,
+    },
+    {
+      id: "case-chf-fr-nbsp",
+      label: "Swiss `Fr.\\u00A024.90`",
+      expectConverted: true,
+    },
+    {
+      id: "case-fr-false-positive",
+      label: "`From 100 friends` (should NOT convert)",
+      expectConverted: false,
     },
   ];
 
