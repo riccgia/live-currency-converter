@@ -29,6 +29,14 @@ const SYMBOL_TO_CODE = {
   "CHF": "CHF",
   "Fr.": "CHF",   // Swiss franc — require the period; bare "Fr" matches "From"/"Friday"
   "SFr.": "CHF",  // older Swiss-franc notation
+  "RM": "MYR",    // Malaysian Ringgit — Google often shows these in cross-region results
+  "Rp": "IDR",    // Indonesian Rupiah
+  "Rs.": "INR",   // Indian Rupee (preferred form, period)
+  "Rs": "INR",    // Indian Rupee (no period)
+  "Kč": "CZK",    // Czech Koruna — Czech-specific glyph, unambiguous
+  "₴": "UAH",
+  "₸": "KZT",
+  "₦": "NGN",
 };
 
 // Currencies whose conventional formatting uses comma as decimal separator.

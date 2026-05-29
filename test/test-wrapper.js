@@ -22,6 +22,9 @@ const html = `<!doctype html><html lang="en"><body>
   <div id="case-chf-fr">Fr. 24.90</div>
   <div id="case-chf-fr-nbsp">Fr.&nbsp;24.90</div>
   <div id="case-fr-false-positive">From 100 friends online</div>
+  <div id="case-myr"><span class="lmQWe" aria-label="Current price: RM&nbsp;20.65. ">RM&nbsp;20.65</span></div>
+  <div id="case-idr">Rp 50.000</div>
+  <div id="case-inr">Rs. 1,500</div>
 </body></html>`;
 
 const dom = new JSDOM(html, { url: "https://example.com/" });
@@ -32,7 +35,7 @@ const { window } = dom;
 // (an EUR-source price with target=EUR would correctly be a no-op).
 const fakeStorageSync = { target: "GBP", enabled: true, showOriginal: true };
 const fakeStorageLocal = {
-  rates: { EUR: 0.9, USD: 1, JPY: 150, GBP: 0.8, CHF: 0.88 },
+  rates: { EUR: 0.9, USD: 1, JPY: 150, GBP: 0.8, CHF: 0.88, MYR: 4.7, IDR: 16000, INR: 85 },
   base: "USD",
 };
 
@@ -131,6 +134,21 @@ const api = m.exports;
       id: "case-fr-false-positive",
       label: "`From 100 friends` (should NOT convert)",
       expectConverted: false,
+    },
+    {
+      id: "case-myr",
+      label: "Malaysian `RM\\u00A020.65` (Google Shopping markup)",
+      expectConverted: true,
+    },
+    {
+      id: "case-idr",
+      label: "Indonesian `Rp 50.000`",
+      expectConverted: true,
+    },
+    {
+      id: "case-inr",
+      label: "Indian `Rs. 1,500`",
+      expectConverted: true,
     },
   ];
 
