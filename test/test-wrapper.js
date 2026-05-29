@@ -44,6 +44,29 @@ const html = `<!doctype html><html lang="en"><body>
   <div id="case-jsonld" itemscope itemtype="https://schema.org/Product">
     <span itemprop="price" content="79.00">79.00</span>
   </div>
+
+  <!-- Saudia-style Angular markup: bare number, currency in a sibling -->
+  <div id="case-context" class="fare-breakdown">
+    <div class="label">Total fare</div>
+    <div class="value ng-star-inserted"> 12,209 </div>
+    <div class="currency">SAR</div>
+  </div>
+
+  <!-- Coop-style: price wrapper that also contains a product image. The image
+       MUST survive the price replacement. -->
+  <div id="case-media-preserve">
+    <span class="price-row">
+      <img class="badge-icon" src="data:image/gif;base64,R0lGODlhAQABAAAAACw=" width="1" height="1">
+      <span>CHF</span> <span>49</span>.<span>90</span>
+    </span>
+  </div>
+
+  <!-- Microdata via <meta> tag: must NOT have a visible span inserted -->
+  <div id="case-meta-itemprop" itemscope itemtype="https://schema.org/Product">
+    <meta itemprop="priceCurrency" content="EUR">
+    <meta itemprop="price" content="19.99">
+    <span class="visible-price">EUR 19.99</span>
+  </div>
 </body></html>`;
 
 const dom = new JSDOM(html, { url: "https://example.com/" });
@@ -54,7 +77,10 @@ const { window } = dom;
 // (an EUR-source price with target=EUR would correctly be a no-op).
 const fakeStorageSync = { target: "GBP", enabled: true, showOriginal: true };
 const fakeStorageLocal = {
-  rates: { EUR: 0.9, USD: 1, JPY: 150, GBP: 0.8, CHF: 0.88, MYR: 4.7, IDR: 16000, INR: 85 },
+  rates: {
+    EUR: 0.9, USD: 1, JPY: 150, GBP: 0.8, CHF: 0.88,
+    MYR: 4.7, IDR: 16000, INR: 85, SAR: 3.75,
+  },
   base: "USD",
 };
 
@@ -184,6 +210,23 @@ const api = m.exports;
       label: "JSON-LD declares CHF; bare 79.00 number converts",
       expectConverted: true,
     },
+    {
+      id: "case-context",
+      label: "Saudia-style: bare `12,209` with `SAR` in sibling",
+      expectConverted: true,
+    },
+    {
+      id: "case-media-preserve",
+      label: "Price wrapper with <img>: image must survive",
+      expectConverted: true,
+      expectImagePreserved: true,
+    },
+    {
+      id: "case-meta-itemprop",
+      label: "<meta itemprop=\"price\"> must NOT get a visible span injected",
+      expectConverted: true,
+      expectNoSpanInMeta: true,
+    },
   ];
 
   let pass = 0, fail = 0;
@@ -197,6 +240,17 @@ const api = m.exports;
       const text = el.textContent;
       ok = text.includes("You pay") && text.includes("today");
       if (!ok) detail = ` (surrounding text lost: "${text}")`;
+    }
+
+    if (ok && c.expectImagePreserved) {
+      const img = el.querySelector("img");
+      if (!img) { ok = false; detail = " (image was destroyed by nuclear replace)"; }
+    }
+
+    if (ok && c.expectNoSpanInMeta) {
+      const meta = el.querySelector("meta");
+      const spanInMeta = meta && meta.querySelector("span.lc-price");
+      if (spanInMeta) { ok = false; detail = " (visible span injected into <meta>)"; }
     }
 
     if (ok && hasConverted) {

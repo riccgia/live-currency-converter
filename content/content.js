@@ -349,7 +349,14 @@ function scanInlineWrappers(root) {
       const span = buildConvertedSpan(m[0], formatTarget(converted));
       const remaining = (agg.slice(0, matchStart) + agg.slice(matchEnd)).trim();
 
-      if (remaining.length < 4) {
+      // Nuclear replace destroys ALL children — including <img>, <svg>, <picture>
+      // etc. that the site needs for layout. Only do it when the element is
+      // strictly text-only; otherwise fall back to precise splicing which
+      // leaves media nodes untouched.
+      const hasMediaChild = el.querySelector(
+        "img,svg,picture,source,video,audio,iframe,canvas,object,embed"
+      );
+      if (remaining.length < 4 && !hasMediaChild) {
         // Element is essentially a price wrapper — replace its content entirely
         // (kills inner styling spans but produces a clean visible price).
         while (el.firstChild) el.removeChild(el.firstChild);
@@ -432,6 +439,11 @@ function scanMicrodataPrices(root) {
   for (const el of els) {
     if (el.dataset.lcConverted === "1") continue;
     if (el.querySelector('[data-lc-converted="1"]')) continue;
+    // Skip invisible markup containers — inserting a visible span into a
+    // <meta> tag is invalid and confuses some Angular/React renderers.
+    const tag = el.tagName;
+    if (tag === "META" || tag === "LINK" || tag === "TITLE") continue;
+    if (!el.textContent.trim()) continue;
     const raw = el.getAttribute("content") || el.textContent.trim();
     if (!raw) continue;
 
@@ -512,16 +524,88 @@ function scanAriaLabelPrices(root) {
   }
 }
 
+// Classes that almost always indicate a numeric price: matched on the leaf
+// element OR up to two ancestors. Used to gate the contextual scan below so
+// we don't go around rewriting random numbers.
+const PRICEY_CLASS_RE = /(?:^|[\s_-])(?:price|amount|value|fare|cost|total|sum|charge|fee|payable|due|subtotal|grandtotal)(?:[\s_-]|$)/i;
+const PURE_NUMBER_RE = /^[\d.,'   \s-]+$/;
+
+function findCurrencyNearby(el) {
+  // Walk up to four ancestors looking for: an itemprop="priceCurrency", an
+  // explicit ISO code in their combined text, or an unambiguous currency
+  // symbol. Falls back to the page-level hint.
+  let p = el.parentElement;
+  for (let i = 0; i < 4 && p; i++, p = p.parentElement) {
+    // Explicit microdata
+    const cur = p.querySelector('[itemprop="priceCurrency"]');
+    if (cur) {
+      const v = cur.getAttribute("content") || cur.textContent.trim();
+      if (v && ISO_CODES.has(v.toUpperCase())) return v.toUpperCase();
+    }
+    // Currency code or symbol in sibling text
+    const t = p.textContent;
+    if (t && t.length < 500) {
+      const isoMatch = t.match(new RegExp(`(?<![A-Za-z])(${[...ISO_CODES].join("|")})(?![A-Za-z])`));
+      if (isoMatch) return isoMatch[1];
+      for (const sym of SYMBOLS_SORTED) {
+        if (t.includes(sym)) return SYMBOL_TO_CODE[sym];
+      }
+    }
+  }
+  return pageCurrencyHint;
+}
+
+// Catch prices that have NO inline currency marker (typical Angular/React
+// pricing tables: `<div class="value">12,209</div>` with the SAR code in a
+// neighbouring element). Strictly gated to avoid touching non-prices.
+function scanContextualPrices(root) {
+  if (root.nodeType !== Node.ELEMENT_NODE) return;
+  const candidates = root.querySelectorAll("*");
+  for (const el of candidates) {
+    if (el.dataset.lcConverted === "1") continue;
+    if (el.children.length > 0) continue;            // leaf only
+    if (SKIP_TAGS.has(el.tagName)) continue;
+
+    const text = el.textContent.trim();
+    if (!text || text.length > 24) continue;
+    if (!/\d/.test(text)) continue;
+    if (!PURE_NUMBER_RE.test(text)) continue;        // bare number, nothing else
+
+    // Class-name gate: this element or its near ancestors must look pricey.
+    let pricey = false;
+    let probe = el;
+    for (let i = 0; i < 3 && probe; i++, probe = probe.parentElement) {
+      const cls = probe.className;
+      if (typeof cls === "string" && PRICEY_CLASS_RE.test(cls)) { pricey = true; break; }
+    }
+    if (!pricey) continue;
+
+    const currency = findCurrencyNearby(el);
+    if (!currency) continue;
+
+    const amount = parseAmount(text, currency);
+    if (!Number.isFinite(amount)) continue;
+    const converted = convert(amount, currency);
+    if (converted == null) continue;
+
+    const span = buildConvertedSpan(text, formatTarget(converted));
+    el.dataset.lcConverted = "1";
+    el.replaceChildren(span);
+  }
+}
+
 function scan(root) {
   if (!state.enabled || !state.rates) return;
   // Order matters:
   // 1) Microdata — explicit, structured, no false positives.
   // 2) Aria-label — clean string, sometimes the only complete copy.
-  // 3) Inline-wrapper aggregation — Amazon-style split prices.
-  // 4) Text nodes — everything else.
+  // 3) Contextual — bare numbers in price-named containers with a nearby code.
+  // 4) Inline-wrapper aggregation — Amazon-style split prices.
+  // 5) Text nodes — everything else.
   if (root.nodeType === Node.ELEMENT_NODE) {
     scanMicrodataPrices(root);
     scanAriaLabelPrices(root);
+    scanContextualPrices(root);
     scanInlineWrappers(root);
   }
   scanTextNodes(root);
