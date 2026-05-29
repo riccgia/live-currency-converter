@@ -19,7 +19,8 @@
       "js": ["content/content.js"],
       "css": ["content/content.css"],
       "run_at": "document_idle",
-      "all_frames": false
+      "all_frames": true,
+      "match_about_blank": false
     }
   ],
   "web_accessible_resources": []

@@ -25,6 +25,25 @@ const html = `<!doctype html><html lang="en"><body>
   <div id="case-myr"><span class="lmQWe" aria-label="Current price: RM&nbsp;20.65. ">RM&nbsp;20.65</span></div>
   <div id="case-idr">Rp 50.000</div>
   <div id="case-inr">Rs. 1,500</div>
+
+  <!-- Microdata: visible text has no symbol, currency comes from a sibling -->
+  <div id="case-microdata" itemscope itemtype="https://schema.org/Product">
+    <meta itemprop="priceCurrency" content="CHF">
+    <span itemprop="price" content="49.90">49.90</span>
+  </div>
+
+  <!-- Aria-label cleanly holds the price even though visible text is fragmented -->
+  <div id="case-aria">
+    <span aria-label="Current price: $24.99"><i class="ico"></i>24.99</span>
+  </div>
+
+  <!-- JSON-LD declares the page's currency hint (CHF), then a bare number -->
+  <script type="application/ld+json">
+    {"@context":"https://schema.org","@type":"Product","offers":{"@type":"Offer","price":"79.00","priceCurrency":"CHF"}}
+  </script>
+  <div id="case-jsonld" itemscope itemtype="https://schema.org/Product">
+    <span itemprop="price" content="79.00">79.00</span>
+  </div>
 </body></html>`;
 
 const dom = new JSDOM(html, { url: "https://example.com/" });
@@ -148,6 +167,21 @@ const api = m.exports;
     {
       id: "case-inr",
       label: "Indian `Rs. 1,500`",
+      expectConverted: true,
+    },
+    {
+      id: "case-microdata",
+      label: "Microdata itemprop=\"price\" (no symbol in DOM text)",
+      expectConverted: true,
+    },
+    {
+      id: "case-aria",
+      label: "Price taken from aria-label",
+      expectConverted: true,
+    },
+    {
+      id: "case-jsonld",
+      label: "JSON-LD declares CHF; bare 79.00 number converts",
       expectConverted: true,
     },
   ];

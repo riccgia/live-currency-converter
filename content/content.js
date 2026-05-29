@@ -376,11 +376,154 @@ function scanInlineWrappers(root) {
   }
 }
 
+// --- Page-level currency hint, used as a fallback for elements that have a
+// numeric price (microdata, content="..." attributes) but no explicit currency.
+let pageCurrencyHint = null;
+function detectPageCurrencyHint() {
+  // 1) Microdata: <meta itemprop="priceCurrency" content="CHF">
+  const micro = document.querySelector('[itemprop="priceCurrency"]');
+  if (micro) {
+    const v = micro.getAttribute("content") || micro.textContent.trim();
+    if (v && ISO_CODES.has(v.toUpperCase())) return v.toUpperCase();
+  }
+  // 2) Open Graph / product metadata
+  for (const sel of [
+    'meta[property="og:price:currency"]',
+    'meta[property="product:price:currency"]',
+    'meta[name="twitter:data1"]',
+    'meta[name="priceCurrency"]',
+  ]) {
+    const el = document.querySelector(sel);
+    const v = el?.getAttribute("content");
+    if (v && ISO_CODES.has(v.toUpperCase())) return v.toUpperCase();
+  }
+  // 3) JSON-LD Product / Offer
+  for (const script of document.querySelectorAll('script[type="application/ld+json"]')) {
+    try {
+      const data = JSON.parse(script.textContent);
+      const found = findCurrencyInLd(data);
+      if (found) return found;
+    } catch { /* malformed JSON-LD is common; ignore */ }
+  }
+  return null;
+}
+function findCurrencyInLd(node) {
+  if (!node || typeof node !== "object") return null;
+  if (Array.isArray(node)) {
+    for (const item of node) { const c = findCurrencyInLd(item); if (c) return c; }
+    return null;
+  }
+  if (typeof node.priceCurrency === "string" && ISO_CODES.has(node.priceCurrency.toUpperCase())) {
+    return node.priceCurrency.toUpperCase();
+  }
+  for (const key of Object.keys(node)) {
+    const c = findCurrencyInLd(node[key]);
+    if (c) return c;
+  }
+  return null;
+}
+
+// Microdata: every element marked as itemprop="price" carries the canonical
+// numeric value (often in a `content` attribute) and the currency is either
+// nearby (sibling/ancestor itemprop="priceCurrency") or the page hint.
+function scanMicrodataPrices(root) {
+  if (root.nodeType !== Node.ELEMENT_NODE) return;
+  const els = root.querySelectorAll('[itemprop="price"]');
+  for (const el of els) {
+    if (el.dataset.lcConverted === "1") continue;
+    if (el.querySelector('[data-lc-converted="1"]')) continue;
+    const raw = el.getAttribute("content") || el.textContent.trim();
+    if (!raw) continue;
+
+    // Currency: look up itemscope chain for a sibling priceCurrency, else page hint
+    let currency = null;
+    let scope = el.closest('[itemscope], [itemtype]');
+    if (scope) {
+      const cur = scope.querySelector('[itemprop="priceCurrency"]');
+      if (cur) {
+        const v = cur.getAttribute("content") || cur.textContent.trim();
+        if (v && ISO_CODES.has(v.toUpperCase())) currency = v.toUpperCase();
+      }
+    }
+    if (!currency) currency = pageCurrencyHint;
+    if (!currency) continue;
+
+    // The content attribute is usually a plain decimal ("19.99"); textContent may have a symbol.
+    const amount = parseAmount(raw.replace(/[^\d.,'\s-]/g, ""), currency);
+    if (!Number.isFinite(amount)) continue;
+    const converted = convert(amount, currency);
+    if (converted == null) continue;
+
+    const original = el.textContent.trim() || raw;
+    const span = buildConvertedSpan(original, formatTarget(converted));
+    // Replace the element's visible content (keep the element + its itemprop wiring intact
+    // so the site's JS still sees the price node).
+    el.replaceChildren(span);
+  }
+}
+
+// Aria-label: when the visible text is fragmented (Amazon, Google Shopping)
+// the accessible label often holds the full clean price string. Treat it as
+// an additional text source the normal regex can run against.
+function scanAriaLabelPrices(root) {
+  if (root.nodeType !== Node.ELEMENT_NODE) return;
+  const els = root.querySelectorAll("[aria-label]");
+  for (const el of els) {
+    if (el.dataset.lcConverted === "1") continue;
+    // Skip if there's already a converted price inside — the visual pass got it.
+    if (el.querySelector('[data-lc-converted="1"]')) continue;
+    const label = el.getAttribute("aria-label");
+    if (!label || !/\d/.test(label)) continue;
+
+    PRICE_RE.lastIndex = 0;
+    const m = PRICE_RE.exec(label);
+    if (!m) continue;
+    const raw = m.groups.numA || m.groups.numB || m.groups.numC;
+    const fromCode = detectCode(m);
+    if (!raw || !fromCode) continue;
+    const amount = parseAmount(raw, fromCode);
+    if (!Number.isFinite(amount)) continue;
+    const converted = convert(amount, fromCode);
+    if (converted == null) continue;
+
+    // Find something in the visible text we can safely replace. Try the full
+    // matched string first; fall back to the numeric portion in either
+    // separator convention (visible "24.99" when aria-label says "$24.99").
+    const visible = el.textContent;
+    const candidates = [m[0], raw];
+    if (raw.includes(",")) candidates.push(raw.replace(/,/g, "."));
+    if (raw.includes(".")) candidates.push(raw.replace(/\./g, ","));
+    let found = null;
+    for (const c of candidates) {
+      const i = visible.indexOf(c);
+      if (i !== -1) { found = { text: c, idx: i }; break; }
+    }
+    if (!found) continue;
+
+    el.dataset.lcConverted = "1";
+    const before = visible.slice(0, found.idx);
+    const after = visible.slice(found.idx + found.text.length);
+    const span = buildConvertedSpan(m[0], formatTarget(converted));
+    el.replaceChildren(
+      ...(before ? [document.createTextNode(before)] : []),
+      span,
+      ...(after ? [document.createTextNode(after)] : []),
+    );
+  }
+}
+
 function scan(root) {
   if (!state.enabled || !state.rates) return;
-  // Wrapper pass first so it can collapse split prices before the text-node pass
-  // (otherwise we'd waste work converting an offscreen copy then re-doing the visible parts).
-  if (root.nodeType === Node.ELEMENT_NODE) scanInlineWrappers(root);
+  // Order matters:
+  // 1) Microdata — explicit, structured, no false positives.
+  // 2) Aria-label — clean string, sometimes the only complete copy.
+  // 3) Inline-wrapper aggregation — Amazon-style split prices.
+  // 4) Text nodes — everything else.
+  if (root.nodeType === Node.ELEMENT_NODE) {
+    scanMicrodataPrices(root);
+    scanAriaLabelPrices(root);
+    scanInlineWrappers(root);
+  }
   scanTextNodes(root);
 }
 
@@ -487,6 +630,8 @@ function countConverted() {
 async function init() {
   await loadSettings();
   await loadRates();
+  pageCurrencyHint = detectPageCurrencyHint();
+  log("page currency hint", pageCurrencyHint);
   // Retry a few times with backoff if the service worker hasn't fetched rates yet
   // (cold start, slow network). Without this, the page silently never converts.
   let attempt = 0;
@@ -543,6 +688,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       lastError: state.lastError,
       pageLocale: document.documentElement.lang || navigator.language || null,
       pageCommaDecimal: PAGE_COMMA_DECIMAL,
+      pageCurrencyHint,
     });
     return false;
   }
