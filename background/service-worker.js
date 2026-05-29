@@ -30,11 +30,37 @@ async function getRates({ force = false } = {}) {
   return { rates, base, updatedAt: ratesUpdatedAt };
 }
 
+// Pick a sensible default target currency from the user's browser locale, so a
+// Swiss user lands on CHF and a US user lands on USD without having to discover
+// the popup. Falls back to USD for unknown regions.
+function defaultTargetForLocale() {
+  const lang = ((self.navigator && self.navigator.language) || "en-US").toLowerCase();
+  const region = (lang.split("-")[1] || "").toLowerCase();
+  const map = {
+    us: "USD", gb: "GBP", uk: "GBP",
+    ie: "EUR", de: "EUR", fr: "EUR", es: "EUR", it: "EUR", nl: "EUR", be: "EUR",
+    pt: "EUR", at: "EUR", gr: "EUR", fi: "EUR", lu: "EUR", mt: "EUR", cy: "EUR",
+    sk: "EUR", si: "EUR", ee: "EUR", lv: "EUR", lt: "EUR", hr: "EUR",
+    ch: "CHF", li: "CHF",
+    jp: "JPY", cn: "CNY", hk: "HKD", tw: "TWD", sg: "SGD",
+    au: "AUD", nz: "NZD", ca: "CAD",
+    in: "INR", br: "BRL", mx: "MXN", kr: "KRW", tr: "TRY", ru: "RUB",
+    pl: "PLN", cz: "CZK", hu: "HUF", ro: "RON", bg: "BGN",
+    se: "SEK", no: "NOK", dk: "DKK", is: "ISK",
+    za: "ZAR", il: "ILS", ae: "AED", sa: "SAR",
+    th: "THB", id: "IDR", ph: "PHP", my: "MYR", vn: "VND",
+    ua: "UAH", ge: "GEL", kz: "KZT",
+    ng: "NGN", eg: "EGP", ke: "KES", ma: "MAD",
+    ar: "ARS", cl: "CLP", co: "COP", pe: "PEN",
+  };
+  return map[region] || "USD";
+}
+
 chrome.runtime.onInstalled.addListener(async () => {
   // Seed defaults; fire-and-forget rate fetch.
   const existing = await chrome.storage.sync.get(["target", "enabled", "showOriginal"]);
   await chrome.storage.sync.set({
-    target: existing.target ?? "EUR",
+    target: existing.target ?? defaultTargetForLocale(),
     enabled: existing.enabled ?? true,
     showOriginal: existing.showOriginal ?? true,
   });

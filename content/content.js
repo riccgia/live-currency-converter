@@ -34,9 +34,19 @@ const SYMBOL_TO_CODE = {
   "Rs.": "INR",   // Indian Rupee (preferred form, period)
   "Rs": "INR",    // Indian Rupee (no period)
   "Kč": "CZK",    // Czech Koruna — Czech-specific glyph, unambiguous
+  "Ft": "HUF",    // Hungarian Forint (ambiguous with "ft" measurement but needs a number)
+  "lei": "RON",   // Romanian Leu
   "₴": "UAH",
   "₸": "KZT",
   "₦": "NGN",
+  "₾": "GEL",     // Georgian Lari
+  "₲": "PYG",     // Paraguayan Guarani
+  "₭": "LAK",     // Lao Kip
+  "៛": "KHR",     // Cambodian Riel
+  "₮": "MNT",     // Mongolian Tugrik
+  "৳": "BDT",     // Bangladeshi Taka
+  "RD$": "DOP",   // Dominican Peso
+  "Bs.": "VES",   // Venezuelan Bolívar (period required to avoid "Bs" false-matches)
 };
 
 // Currencies whose conventional formatting uses comma as decimal separator.
@@ -69,7 +79,9 @@ const ISO_CODES = new Set([
   "USD","EUR","GBP","JPY","CHF","CAD","AUD","NZD","CNY","HKD","SGD","INR",
   "KRW","BRL","MXN","ZAR","SEK","NOK","DKK","PLN","TRY","AED","SAR","ILS",
   "THB","IDR","PHP","MYR","VND","RUB","TWD","CZK","HUF","RON","ARS","CLP",
-  "COP","PEN","EGP","NGN","PKR","BDT","LKR","KZT","UAH",
+  "COP","PEN","EGP","NGN","PKR","BDT","LKR","KZT","UAH","GEL","PYG","LAK",
+  "KHR","MNT","DOP","VES","ISK","BGN","HRK","MAD","TND","KES","TZS","UGX",
+  "GHS","JOD","KWD","OMR","QAR","BHD","NPR",
 ]);
 
 const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
