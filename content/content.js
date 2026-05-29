@@ -173,6 +173,15 @@ const SKIP_TAGS = new Set([
   "CODE","PRE","KBD","SAMP","VAR",
 ]);
 
+// Block-level elements: the inline-wrapper aggregator stops descending at these
+// so we don't merge text from neighbouring layout regions into one "price".
+const BLOCK_TAGS = new Set([
+  "ADDRESS","ARTICLE","ASIDE","BLOCKQUOTE","CANVAS","DD","DETAILS","DIALOG",
+  "DIV","DL","DT","FIELDSET","FIGCAPTION","FIGURE","FOOTER","FORM","H1","H2","H3",
+  "H4","H5","H6","HEADER","HGROUP","HR","LI","MAIN","NAV","OL","P","SECTION",
+  "TABLE","TBODY","TD","TFOOT","TH","THEAD","TR","UL","VIDEO",
+]);
+
 function shouldSkip(node) {
   let el = node.parentElement;
   while (el) {
@@ -228,8 +237,7 @@ function processTextNode(node) {
   }
 }
 
-function scan(root) {
-  if (!state.enabled || !state.rates) return;
+function scanTextNodes(root) {
   const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
     acceptNode(n) {
       if (!n.nodeValue || !/\d/.test(n.nodeValue)) return NodeFilter.FILTER_REJECT;
@@ -243,6 +251,114 @@ function scan(root) {
   for (const node of nodes) processTextNode(node);
 }
 
+// Aggregate inline text under `el`, stopping at block / skipped / already-converted
+// boundaries. Returns the combined string and a segment map back to text nodes.
+function getInlineTextSegments(el) {
+  const segments = [];
+  let agg = "";
+  function walk(node) {
+    if (node.nodeType === Node.TEXT_NODE) {
+      segments.push({ node, start: agg.length });
+      agg += node.nodeValue;
+      return;
+    }
+    if (node.nodeType !== Node.ELEMENT_NODE) return;
+    const tag = node.tagName;
+    if (SKIP_TAGS.has(tag) || BLOCK_TAGS.has(tag)) return;
+    if (node.dataset && node.dataset.lcConverted === "1") return;
+    if (tag === "BR") { agg += "\n"; return; }
+    for (const child of node.childNodes) walk(child);
+  }
+  for (const child of el.childNodes) walk(child);
+  return { agg, segments };
+}
+
+function buildConvertedSpan(originalText, convertedText) {
+  const span = document.createElement("span");
+  span.className = "lc-price";
+  span.dataset.lcConverted = "1";
+  span.dataset.lcOriginal = originalText;
+  span.textContent = convertedText;
+  if (state.showOriginal) span.title = `Original: ${originalText}`;
+  return span;
+}
+
+// Second-pass scan: handles prices split across multiple text nodes (Amazon's
+// `<span>$</span><span>10</span>.<span>99</span>` and similar). Walks elements
+// bottom-up so the innermost inline wrapper containing the full price wins.
+function scanInlineWrappers(root) {
+  if (root.nodeType !== Node.ELEMENT_NODE) return;
+  // Process descendants bottom-up, then root itself last, so an innermost
+  // inline wrapper always wins over an outer one with the same agg.
+  const elements = [...Array.from(root.querySelectorAll("*")).reverse(), root];
+  for (const el of elements) {
+    if (SKIP_TAGS.has(el.tagName)) continue;
+    if (el.dataset.lcConverted === "1") continue;
+    if (el.childElementCount === 0) continue; // pure text — text-node pass handled it
+    if (!el.isConnected) continue;            // may have been removed by an earlier replacement
+
+    const tc = el.textContent;
+    if (!tc || tc.length > 200 || !/\d/.test(tc)) continue;
+
+    const { agg, segments } = getInlineTextSegments(el);
+    if (!agg || segments.length < 2 || !/\d/.test(agg)) continue;
+
+    PRICE_RE.lastIndex = 0;
+    let m;
+    while ((m = PRICE_RE.exec(agg)) !== null) {
+      const raw = m.groups.numA || m.groups.numB || m.groups.numC;
+      const fromCode = detectCode(m);
+      if (!raw || !fromCode) continue;
+      const amount = parseAmount(raw, fromCode);
+      if (!Number.isFinite(amount)) continue;
+      const converted = convert(amount, fromCode);
+      if (converted == null) continue;
+
+      const matchStart = m.index;
+      const matchEnd = m.index + m[0].length;
+      const overlap = segments.filter(
+        (s) => s.start < matchEnd && s.start + s.node.nodeValue.length > matchStart
+      );
+      if (overlap.length < 2) continue; // single text node — leave to text-node pass
+
+      const span = buildConvertedSpan(m[0], formatTarget(converted));
+      const remaining = (agg.slice(0, matchStart) + agg.slice(matchEnd)).trim();
+
+      if (remaining.length < 4) {
+        // Element is essentially a price wrapper — replace its content entirely
+        // (kills inner styling spans but produces a clean visible price).
+        while (el.firstChild) el.removeChild(el.firstChild);
+        const before = agg.slice(0, matchStart);
+        const after = agg.slice(matchEnd);
+        if (before) el.appendChild(document.createTextNode(before));
+        el.appendChild(span);
+        if (after) el.appendChild(document.createTextNode(after));
+      } else {
+        // Surrounding text matters — splice the span across the overlap nodes.
+        const first = overlap[0];
+        const last = overlap[overlap.length - 1];
+        const firstBefore = first.node.nodeValue.slice(0, matchStart - first.start);
+        const lastAfter = last.node.nodeValue.slice(matchEnd - last.start);
+        first.node.nodeValue = firstBefore;
+        first.node.parentNode.insertBefore(span, first.node.nextSibling);
+        for (let i = 1; i < overlap.length - 1; i++) {
+          overlap[i].node.nodeValue = "";
+        }
+        last.node.nodeValue = lastAfter;
+      }
+      break; // segments are now stale; outer iteration continues with other elements
+    }
+  }
+}
+
+function scan(root) {
+  if (!state.enabled || !state.rates) return;
+  // Wrapper pass first so it can collapse split prices before the text-node pass
+  // (otherwise we'd waste work converting an offscreen copy then re-doing the visible parts).
+  if (root.nodeType === Node.ELEMENT_NODE) scanInlineWrappers(root);
+  scanTextNodes(root);
+}
+
 function revertAll() {
   for (const span of document.querySelectorAll("span.lc-price[data-lc-converted='1']")) {
     const original = span.dataset.lcOriginal ?? span.textContent;
@@ -251,19 +367,60 @@ function revertAll() {
 }
 
 let observer = null;
+let mutationFlushQueued = false;
+const pendingElements = new Set();
+const pendingTextNodes = new Set();
+
+function flushMutations() {
+  mutationFlushQueued = false;
+  if (!state.enabled || !state.rates) {
+    pendingElements.clear();
+    pendingTextNodes.clear();
+    return;
+  }
+  const els = Array.from(pendingElements);
+  const texts = Array.from(pendingTextNodes);
+  pendingElements.clear();
+  pendingTextNodes.clear();
+  for (const el of els) {
+    if (el.isConnected) scan(el);
+  }
+  for (const tn of texts) {
+    if (tn.isConnected) processTextNode(tn);
+  }
+}
 
 function startObserver() {
   if (observer) return;
   observer = new MutationObserver((mutations) => {
     if (!state.enabled || !state.rates) return;
     for (const m of mutations) {
-      for (const node of m.addedNodes) {
-        if (node.nodeType === Node.ELEMENT_NODE) scan(node);
-        else if (node.nodeType === Node.TEXT_NODE) processTextNode(node);
+      if (m.type === "childList") {
+        for (const node of m.addedNodes) {
+          if (node.nodeType === Node.ELEMENT_NODE) {
+            // Skip spans we just inserted — avoids a feedback loop where our
+            // own DOM writes re-enter the scanner.
+            if (node.dataset && node.dataset.lcConverted === "1") continue;
+            pendingElements.add(node);
+          } else if (node.nodeType === Node.TEXT_NODE) {
+            pendingTextNodes.add(node);
+          }
+        }
+      } else if (m.type === "characterData") {
+        if (m.target.nodeType === Node.TEXT_NODE) pendingTextNodes.add(m.target);
       }
     }
+    if (!mutationFlushQueued && (pendingElements.size || pendingTextNodes.size)) {
+      mutationFlushQueued = true;
+      // Coalesce bursts (e.g. a price ticker emitting many updates per frame).
+      (window.requestIdleCallback || ((cb) => setTimeout(cb, 50)))(flushMutations);
+    }
   });
-  observer.observe(document.body, { childList: true, subtree: true });
+  observer.observe(document.body, {
+    childList: true,
+    subtree: true,
+    characterData: true,
+  });
 }
 
 function stopObserver() {
@@ -289,6 +446,14 @@ async function loadRates() {
 async function init() {
   await loadSettings();
   await loadRates();
+  // Retry a few times with backoff if the service worker hasn't fetched rates yet
+  // (cold start, slow network). Without this, the page silently never converts.
+  let attempt = 0;
+  while (state.enabled && !state.rates && attempt < 4) {
+    attempt++;
+    await new Promise((r) => setTimeout(r, 1000 * attempt));
+    await loadRates();
+  }
   if (state.enabled && state.rates) {
     scan(document.body);
     startObserver();

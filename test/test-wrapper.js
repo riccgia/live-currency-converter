@@ -1,0 +1,136 @@
+// Quick fixture test for the split-text-node (wrapper) scan path.
+// Mounts the content script into jsdom, stubs chrome.* APIs, and verifies
+// that the rewriter handles common real-world price markups.
+
+const fs = require("fs");
+const path = require("path");
+const { JSDOM } = require("jsdom");
+
+const html = `<!doctype html><html lang="en"><body>
+  <div id="case-single"><span>$10.99</span></div>
+  <div id="case-amazon"><span class="a-price">
+    <span class="a-offscreen">$10.99</span>
+    <span aria-hidden="true">
+      <span class="a-price-symbol">$</span><span class="a-price-whole">10</span><span class="a-price-decimal">.</span><span class="a-price-fraction">99</span>
+    </span>
+  </span></div>
+  <div id="case-google-shopping"><span>$<span>24</span>.<span>99</span></span></div>
+  <div id="case-with-surround"><span>You pay <span>$</span><span>10.99</span> today</span></div>
+  <div id="case-eu"><span>1.234,56&nbsp;€</span></div>
+  <div id="case-jpy">¥1,000</div>
+</body></html>`;
+
+const dom = new JSDOM(html, { url: "https://example.com/" });
+const { window } = dom;
+
+// Pre-populate stubs that the content script reads from at import-time.
+// Target GBP so every fixture below exercises a real conversion
+// (an EUR-source price with target=EUR would correctly be a no-op).
+const fakeStorageSync = { target: "GBP", enabled: true, showOriginal: true };
+const fakeStorageLocal = {
+  rates: { EUR: 0.9, USD: 1, JPY: 150, GBP: 0.8 },
+  base: "USD",
+};
+
+global.window = window;
+global.document = window.document;
+global.navigator = window.navigator;
+global.Node = window.Node;
+global.NodeFilter = window.NodeFilter;
+global.MutationObserver = window.MutationObserver;
+global.HTMLElement = window.HTMLElement;
+global.Intl = Intl;
+
+global.chrome = {
+  storage: {
+    sync: { get: (_keys) => Promise.resolve(fakeStorageSync) },
+    local: { get: (_keys) => Promise.resolve(fakeStorageLocal) },
+  },
+  runtime: {
+    sendMessage: (msg) => {
+      if (msg.type === "GET_RATES") {
+        return Promise.resolve({ ok: true, rates: fakeStorageLocal.rates, base: "USD" });
+      }
+      return Promise.resolve({ ok: false });
+    },
+    onMessage: { addListener: () => {} },
+  },
+};
+
+// Load the content script source.
+const srcPath = path.join(__dirname, "..", "content", "content.js");
+const src = fs.readFileSync(srcPath, "utf8");
+// Strip the bottom auto-init block so we can drive init manually.
+const stripped = src.replace(/if \(document\.readyState[\s\S]*$/m, "");
+// Expose internals for testing.
+const wrapped =
+  stripped +
+  "\nmodule.exports = { init, scan, PRICE_RE, scanInlineWrappers, scanTextNodes };\n";
+
+// Evaluate as CommonJS module
+const Module = require("module");
+const m = new Module(srcPath);
+m._compile(wrapped, srcPath);
+const api = m.exports;
+
+(async () => {
+  await api.init();
+
+  const cases = [
+    {
+      id: "case-single",
+      label: "single text node `<span>$10.99</span>`",
+      expectConverted: true,
+    },
+    {
+      id: "case-amazon",
+      label: "Amazon split markup",
+      expectConverted: true,
+    },
+    {
+      id: "case-google-shopping",
+      label: "Google Shopping split: `$<span>24</span>.<span>99</span>`",
+      expectConverted: true,
+    },
+    {
+      id: "case-with-surround",
+      label: "split price with surrounding text",
+      expectConverted: true,
+      expectSurround: true,
+    },
+    {
+      id: "case-eu",
+      label: "EU format `1.234,56 €`",
+      expectConverted: true,
+    },
+    {
+      id: "case-jpy",
+      label: "JPY `¥1,000`",
+      expectConverted: true,
+    },
+  ];
+
+  let pass = 0, fail = 0;
+  for (const c of cases) {
+    const el = document.getElementById(c.id);
+    const hasConverted = !!el.querySelector("span.lc-price[data-lc-converted='1']");
+    let ok = hasConverted === c.expectConverted;
+    let detail = "";
+
+    if (ok && c.expectSurround) {
+      const text = el.textContent;
+      ok = text.includes("You pay") && text.includes("today");
+      if (!ok) detail = ` (surrounding text lost: "${text}")`;
+    }
+
+    if (ok && hasConverted) {
+      const conv = el.querySelector("span.lc-price").textContent;
+      detail += ` -> "${conv}"`;
+    }
+
+    console.log((ok ? "PASS" : "FAIL").padEnd(5), c.label.padEnd(48), detail);
+    ok ? pass++ : fail++;
+  }
+  console.log(`\n${pass} passed, ${fail} failed`);
+  process.exit(fail ? 1 : 0);
+})();
