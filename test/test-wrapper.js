@@ -67,6 +67,24 @@ const html = `<!doctype html><html lang="en"><body>
     <meta itemprop="price" content="19.99">
     <span class="visible-price">EUR 19.99</span>
   </div>
+
+  <!-- Coop-style: [itemprop="price"] element ALSO contains a product image.
+       Microdata scan must preserve the image. -->
+  <div id="case-microdata-with-image" itemscope itemtype="https://schema.org/Product">
+    <meta itemprop="priceCurrency" content="CHF">
+    <span itemprop="price" content="49.90">
+      <img class="badge" src="data:image/gif;base64,R0lGODlhAQABAAAAACw=" width="1" height="1">
+      <span class="num">49.90</span>
+    </span>
+  </div>
+
+  <!-- Aria-label on a wrapper that also contains an image -->
+  <div id="case-aria-with-image">
+    <a aria-label="Add to cart: Fr. 12.50">
+      <img src="data:image/gif;base64,R0lGODlhAQABAAAAACw=" width="1" height="1">
+      <span>Fr. 12.50</span>
+    </a>
+  </div>
 </body></html>`;
 
 const dom = new JSDOM(html, { url: "https://example.com/" });
@@ -226,6 +244,18 @@ const api = m.exports;
       label: "<meta itemprop=\"price\"> must NOT get a visible span injected",
       expectConverted: true,
       expectNoSpanInMeta: true,
+    },
+    {
+      id: "case-microdata-with-image",
+      label: "Microdata price element also contains <img> — image survives",
+      expectConverted: true,
+      expectImagePreserved: true,
+    },
+    {
+      id: "case-aria-with-image",
+      label: "Aria-label wrapper also contains <img> — image survives",
+      expectConverted: true,
+      expectImagePreserved: true,
     },
   ];
 

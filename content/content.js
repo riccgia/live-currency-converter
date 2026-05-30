@@ -308,6 +308,37 @@ function buildConvertedSpan(originalText, convertedText) {
   return span;
 }
 
+// Find the first descendant text node of `rootEl` containing `searchText` and
+// splice the converted `span` over that occurrence — preserving every other
+// child (images, SVGs, sibling spans, the parent's own attributes). Returns
+// true on success.
+function replaceVisibleTextOccurrence(rootEl, searchText, span) {
+  if (!searchText) return false;
+  const walker = document.createTreeWalker(rootEl, NodeFilter.SHOW_TEXT, {
+    acceptNode(n) {
+      if (!n.nodeValue) return NodeFilter.FILTER_REJECT;
+      if (shouldSkip(n)) return NodeFilter.FILTER_REJECT;
+      return NodeFilter.FILTER_ACCEPT;
+    },
+  });
+  let node;
+  while ((node = walker.nextNode())) {
+    const idx = node.nodeValue.indexOf(searchText);
+    if (idx === -1) continue;
+    const before = node.nodeValue.slice(0, idx);
+    const after = node.nodeValue.slice(idx + searchText.length);
+    const frag = document.createDocumentFragment();
+    if (before) frag.appendChild(document.createTextNode(before));
+    frag.appendChild(span);
+    if (after) frag.appendChild(document.createTextNode(after));
+    node.parentNode.replaceChild(frag, node);
+    return true;
+  }
+  return false;
+}
+
+const MEDIA_SELECTOR = "img,svg,picture,source,video,audio,iframe,canvas,object,embed";
+
 // Second-pass scan: handles prices split across multiple text nodes (Amazon's
 // `<span>$</span><span>10</span>.<span>99</span>` and similar). Walks elements
 // bottom-up so the innermost inline wrapper containing the full price wins.
@@ -468,9 +499,22 @@ function scanMicrodataPrices(root) {
 
     const original = el.textContent.trim() || raw;
     const span = buildConvertedSpan(original, formatTarget(converted));
-    // Replace the element's visible content (keep the element + its itemprop wiring intact
-    // so the site's JS still sees the price node).
-    el.replaceChildren(span);
+    // Prefer surgical text-node replacement (preserves <img>, child spans,
+    // Angular bindings, etc.). Fall back to wholesale child replacement only
+    // when the element has no media children — never destroy images.
+    const visible = el.textContent;
+    const candidates = [original];
+    if (raw && raw !== original) candidates.push(raw);
+    let replaced = false;
+    for (const c of candidates) {
+      if (visible.includes(c) && replaceVisibleTextOccurrence(el, c, span)) {
+        replaced = true; break;
+      }
+    }
+    if (!replaced) {
+      if (el.querySelector(MEDIA_SELECTOR)) continue; // bail rather than destroy media
+      el.replaceChildren(span);
+    }
   }
 }
 
@@ -498,29 +542,33 @@ function scanAriaLabelPrices(root) {
     const converted = convert(amount, fromCode);
     if (converted == null) continue;
 
-    // Find something in the visible text we can safely replace. Try the full
-    // matched string first; fall back to the numeric portion in either
+    // Try the full matched string, then the numeric portion in either
     // separator convention (visible "24.99" when aria-label says "$24.99").
     const visible = el.textContent;
     const candidates = [m[0], raw];
     if (raw.includes(",")) candidates.push(raw.replace(/,/g, "."));
     if (raw.includes(".")) candidates.push(raw.replace(/\./g, ","));
-    let found = null;
-    for (const c of candidates) {
-      const i = visible.indexOf(c);
-      if (i !== -1) { found = { text: c, idx: i }; break; }
-    }
-    if (!found) continue;
 
-    el.dataset.lcConverted = "1";
-    const before = visible.slice(0, found.idx);
-    const after = visible.slice(found.idx + found.text.length);
     const span = buildConvertedSpan(m[0], formatTarget(converted));
-    el.replaceChildren(
-      ...(before ? [document.createTextNode(before)] : []),
-      span,
-      ...(after ? [document.createTextNode(after)] : []),
-    );
+    let replaced = false;
+    for (const c of candidates) {
+      if (visible.includes(c) && replaceVisibleTextOccurrence(el, c, span)) {
+        replaced = true; break;
+      }
+    }
+    if (!replaced) {
+      // Couldn't find a single text node carrying the price. Only nuke the
+      // element's children if there are no media nodes to destroy.
+      if (el.querySelector(MEDIA_SELECTOR)) continue;
+      const idx = visible.indexOf(candidates[0]) !== -1 ? visible.indexOf(candidates[0]) : 0;
+      const before = visible.slice(0, idx);
+      const after = visible.slice(idx + candidates[0].length);
+      el.replaceChildren(
+        ...(before ? [document.createTextNode(before)] : []),
+        span,
+        ...(after ? [document.createTextNode(after)] : []),
+      );
+    }
   }
 }
 
